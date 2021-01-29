@@ -1,0 +1,128 @@
+---
+title: "Covid-19 in Finland - Case Study"
+author: "Emil Sievänen"
+date: "1/29/2021"
+output: html_document
+---
+```{r dependencies, include = FALSE}
+library(tidyverse)
+library(ggmap)
+```
+
+# Introduction
+
+In this notebook, we visualize the coronavirus situation in Finland. We use a dataset acquired from the [Finnish Institute for Health and Welfare](https://thl.fi/fi/tilastot-ja-data/aineistot-ja-palvelut/avoin-data/varmistetut-koronatapaukset-suomessa-covid-19-
+) and use the `tidyverse` and `ggmap` packages to manipulate and visualize the data. The `ggmap` package uses the Google Maps API, so it is necessary to sign up to the Google Cloud Platform to be able to access the API. The full source code is available at the projects [GitHub repository](https://github.com/eenaveis/covid-19).
+
+# Data Preparation
+
+Lets get started by importing our data. The Google Cloud Platform API key is stored in our home directory in a ".Renviron" file, so you need to create that file as well, or directly copy and paste the API key as a string to the `api_key` variable in R.
+
+```{r data_import, message = FALSE}
+api_key <- Sys.getenv("GOOGLE_MAPS")
+covid1 <- read_csv2("./data/covid19case.csv")
+```
+
+Lets take a look at our data.
+
+```{r lookup, echo = FALSE}
+covid1
+```
+
+It seems that our date column is formatted badly so we need to reformat it to a more structured representation. We first split the "Aika" column with `separate` (which is in finnish and means time) and then we combine the "year" and "week" columns into a one column named "date" and convert it to a date object. After that we rename the columns and drop all rows with missing values.
+
+```{r data_cleaning, warning = FALSE}
+covid2 <- covid1 %>%
+  separate(Aika, c("y", "year", "w", "week"), sep =" ") %>%
+  select(-y, -w) %>%
+  unite(date, c(year, week), sep = "") %>%
+  mutate(date = paste(date, "04", sep = "")) %>%
+  transmute(date = as.Date(date, "%Y%U%w"), area = Alue, cases = val) %>%
+  filter(!is.na(cases), !is.na(date))
+```
+
+# Exploratory Analysis
+
+Now that we have our data cleaned, we start to examine our data more in depth. Lets start by summarising the data. The below output summarises the total covid-19 cases by different areas.
+
+```{r summarising, echo = FALSE}
+covid2 %>% group_by(area) %>%
+  summarise(total_cases = sum(cases)) %>%
+  arrange(desc(total_cases))
+```
+
+As we can see, the first area "Kaikki Alueet" (All Areas) counts the covid-19 cases in all of the areas. We will need to remove those values for the following steps we have. It also seems that the Helsinki area has clearly the most covid-19 cases in all of the areas. Lets plot the total covid-19 cases in the top 5 areas.
+
+```{r plot_top_five, echo = FALSE}
+covid3 <- covid2 %>%
+  filter(area != "Kaikki Alueet") %>%
+  group_by(area) %>%
+  summarise(total_cases = sum(cases)) %>%
+  top_n(5)
+  
+ggplot(data = covid3) +
+  geom_col(aes(x = area, y = total_cases, fill = area)) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+This plot confirms the notion that the Helsinki area has the most significant exposure to covid-19. Lets have a look how the covid-19 cases have developed with the passage of time.
+
+```{r plot_cumulative_cases, echo = FALSE}
+covid4 <- covid2 %>%
+  semi_join(covid3, by = "area") %>%
+  group_by(area) %>%
+  mutate(cumulative_cases = cumsum(cases)) %>%
+  ungroup()
+
+ggplot(data = covid4) +
+  geom_line(aes(x = date, y = cumulative_cases, group = area, color = area))
+```
+
+As we can see, the covid-19 cases have exploded after October 2020 in all of the areas, most notably in the Helsinki area. As a final step, lets put the covid-19 cases on a map to have a better view where exactly the covid-19 has spread. We use the `ggmap` package to draw the map, which is built on top of the `ggplot2` package. We have also built a new tibble that has additional columns representing the latitude and longitude coordinates of the different areas in the top 5 areas, so that we can plot the total cases on the map.
+
+```{r register_api_key, include = FALSE}
+register_google(api_key)
+```
+
+```{r plot_map}
+# area coordinates
+coordinates_HUS <- c(24.943536799, 60.166640739)
+coordinates_PS <- c(23.761290078, 61.497742570)
+coordinates_PPS <- c(25.472099070, 65.013784817)
+coordinates_VS <- c(21.615874122, 63.092588875)
+coordinates_VSS <- c(22.266866666, 60.451690351)
+# center point coordinates (Jyväskylä)
+coordinates_center <- c(lon = 25.72088, lat = 62.24147)
+
+lon <- c(coordinates_HUS[1], 
+         coordinates_PS[1],
+         coordinates_PPS[1], 
+         coordinates_VS[1],
+         coordinates_VSS[1])
+
+lat <- c(coordinates_HUS[2], 
+         coordinates_PS[2],
+         coordinates_PPS[2], 
+         coordinates_VS[2],
+         coordinates_VSS[2])
+
+covid5  <- covid3 %>% add_column(lon, lat)
+
+map <- ggmap(get_googlemap(coordinates_center, zoom = 6))
+
+map + 
+  geom_point(aes(x = lon, y = lat, size = total_cases), 
+             data = covid5, 
+             color = "blue", 
+             alpha = 0.5
+             ) +
+  theme(axis.ticks = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "none") +
+  scale_size_continuous(range = c(5, 30))
+```
+
+Now it is more clearly seen where the covid-19 has spread the most. This is it for this time, next time we will do some big data analysis with the IMDB data. In the meanwhile, be sure to check out my other [projects](https://github.com/eenaveis/) too!
